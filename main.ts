@@ -7,6 +7,30 @@ import { join } from 'node:path';
 
 const enc = new TextEncoder();
 
+// Opcode metadata [byte, immediate bytes, pops, pushes], mirroring the
+// reference VM's OPS table. A byte not listed here is an unknown opcode
+// (trap 5) — note 0x1f is unassigned, so it must trap rather than no-op.
+const OPS = [
+  [0x00, 0, 0, 0], [0x01, 1, 0, 1], [0x02, 4, 0, 1], [0x03, 0, 1, 0],
+  [0x04, 0, 1, 2], [0x05, 0, 2, 2], [0x06, 0, 2, 3], [0x07, 0, 3, 3],
+  [0x10, 0, 2, 1], [0x11, 0, 2, 1], [0x12, 0, 2, 1], [0x13, 0, 2, 1],
+  [0x14, 0, 2, 1], [0x15, 0, 2, 1], [0x16, 0, 2, 1], [0x17, 0, 1, 1],
+  [0x18, 0, 2, 1], [0x19, 0, 2, 1], [0x1a, 0, 2, 1], [0x1b, 0, 1, 1],
+  [0x1c, 0, 2, 1], [0x1d, 0, 2, 1], [0x1e, 0, 2, 1], [0x20, 0, 2, 1],
+  [0x21, 0, 2, 1], [0x22, 0, 2, 1], [0x30, 2, 0, 0], [0x31, 2, 1, 0],
+  [0x32, 2, 1, 0], [0x33, 2, 0, 0], [0x34, 0, 0, 0], [0x40, 0, 1, 1],
+  [0x41, 0, 2, 0], [0x50, 0, 1, 0], [0x51, 0, 1, 0], [0x52, 0, 0, 1],
+  [0x53, 0, 1, 0],
+];
+const IMM = new Int8Array(256).fill(-1);
+const POPS = new Int8Array(256);
+const PUSHES = new Int8Array(256);
+for (const [b, imm, pops, pushes] of OPS) {
+  IMM[b] = imm;
+  POPS[b] = pops;
+  PUSHES[b] = pushes;
+}
+
 function run(p: Uint8Array, inp: Uint8Array): { out: Uint8Array; code: number } {
   const D = new Int32Array(256); // data stack
   let sp = 0;
@@ -23,47 +47,13 @@ function run(p: Uint8Array, inp: Uint8Array): { out: Uint8Array; code: number } 
     if (steps === 1000000) return done(10);
     if (pc < 0 || pc >= p.length) return done(9);
     const op = p[pc];
-    const known =
-      op <= 0x07 ||
-      (op >= 0x10 && op <= 0x22) ||
-      (op >= 0x30 && op <= 0x34) ||
-      op === 0x40 ||
-      op === 0x41 ||
-      (op >= 0x50 && op <= 0x53);
-    if (!known) return done(5);
-    const imm = op === 0x01 ? 1 : op === 0x02 ? 4 : op >= 0x30 && op <= 0x33 ? 2 : 0;
+    const imm = IMM[op];
+    if (imm < 0) return done(5);
     if (pc + imm >= p.length) return done(9);
     steps++;
     const next = pc + 1 + imm;
-    // How many values this instruction pops and pushes.
-    let pops = 0;
-    let pushes = 0;
-    if (op >= 0x10 && op <= 0x22) {
-      pops = 2;
-      pushes = 1;
-      if (op === 0x17 || op === 0x1b) pops = 1;
-    } else if (op === 0x03 || op === 0x31 || op === 0x32 || op === 0x50 || op === 0x51 || op === 0x53) {
-      pops = 1;
-    } else if (op === 0x01 || op === 0x02 || op === 0x52) {
-      pushes = 1;
-    } else if (op === 0x04) {
-      pops = 1;
-      pushes = 2;
-    } else if (op === 0x05) {
-      pops = 2;
-      pushes = 2;
-    } else if (op === 0x06) {
-      pops = 2;
-      pushes = 3;
-    } else if (op === 0x07) {
-      pops = 3;
-      pushes = 3;
-    } else if (op === 0x40) {
-      pops = 1;
-      pushes = 1;
-    } else if (op === 0x41) {
-      pops = 2;
-    }
+    const pops = POPS[op];
+    const pushes = PUSHES[op];
     if (sp < pops) return done(2);
     if (sp - pops + pushes > 256) return done(3);
     pc = next;
